@@ -3,7 +3,6 @@ package com.example.authenticator
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Bundle
@@ -12,6 +11,11 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -49,17 +53,17 @@ import javax.crypto.spec.SecretKeySpec
 import kotlin.math.pow
 
 // -------------------------------------------------------------
-// Data Model
+// Data Model (Immutable for Compose Recomposition)
 // -------------------------------------------------------------
 data class Account(
-    var websiteName: String = "Unknown",
-    var websiteAddress: String = "-",
-    var username: String = "-",
-    var secret: String = "",
-    var algorithm: String = "SHA1",
-    var digits: Int = 6,
-    var period: Int = 30,
-    var showAdvanced: Boolean = false
+    val websiteName: String = "Unknown",
+    val websiteAddress: String = "-",
+    val username: String = "-",
+    val secret: String = "",
+    val algorithm: String = "SHA1",
+    val digits: Int = 6,
+    val period: Int = 30,
+    val showAdvanced: Boolean = false
 )
 
 // -------------------------------------------------------------
@@ -96,6 +100,15 @@ fun AuthenticatorScreen() {
 
     val activeAccount = accounts.getOrNull(selectedIndex)
 
+    // Helper to immutably update the active account and trigger recomposition
+    fun updateActiveAccount(transform: (Account) -> Account) {
+        if (selectedIndex in accounts.indices) {
+            val updated = transform(accounts[selectedIndex])
+            accounts = accounts.toMutableList().also { it[selectedIndex] = updated }
+            saveAccounts(context, accounts)
+        }
+    }
+
     // Image Picker for QR Code
     val imagePicker = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -113,13 +126,13 @@ fun AuthenticatorScreen() {
                     Toast.makeText(context, "Invalid 2FA QR code URI", Toast.LENGTH_SHORT).show()
                 }
             } else {
-                Toast.makeText(context, "No QR Code found in image", Toast.LENGTH_SHORT).show()
+                Toast.makeText(context, "No readable QR code found in image", Toast.LENGTH_SHORT).show()
             }
         }
     }
 
-    // 1-second interval loop for TOTP calculation & auto-clipboard
-    LaunchedEffect(activeAccount, selectedIndex) {
+    // 500ms loop for TOTP calculation & auto-copy to clipboard
+    LaunchedEffect(activeAccount?.secret, activeAccount?.algorithm, activeAccount?.digits, activeAccount?.period) {
         var lastCode = ""
         while (true) {
             if (activeAccount != null && activeAccount.secret.isNotBlank()) {
@@ -135,7 +148,6 @@ fun AuthenticatorScreen() {
                 )
                 currentOtpCode = newCode
 
-                // Auto copy to clipboard on rotation or account select
                 if (newCode != lastCode && newCode != "ERROR") {
                     lastCode = newCode
                     copyToClipboard(context, newCode, showToast = false)
@@ -158,7 +170,6 @@ fun AuthenticatorScreen() {
                 .padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
-            // Header / Title
             Text(
                 text = "Accounts",
                 color = Color.White,
@@ -166,7 +177,7 @@ fun AuthenticatorScreen() {
                 fontWeight = FontWeight.Bold
             )
 
-            // Horizontal Accounts Selector
+            // Account List View
             if (accounts.isNotEmpty()) {
                 LazyColumn(
                     modifier = Modifier
@@ -206,39 +217,56 @@ fun AuthenticatorScreen() {
                                 )
                             }
                             if (isSelected) {
-                                Text("ACTIVE", color = Color(0xFF1E88E5), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                                Text(
+                                    text = "ACTIVE",
+                                    color = Color(0xFF1E88E5),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
                 }
             }
 
-            // Quick Action Buttons
-            Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            // Top Action Buttons (High contrast, clearly visible)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(10.dp)
+            ) {
                 Button(
                     onClick = { imagePicker.launch("image/*") },
                     modifier = Modifier.weight(1f),
                     colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E88E5)),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text("Select QR Image", fontSize = 13.sp)
+                    Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Select QR", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
+
+                // Add Manually Button (Changed from dark purple to high-visibility teal/cyan)
                 Button(
                     onClick = { showManualAddDialog = true },
                     modifier = Modifier.weight(1f),
-                    colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF23283C)),
+                    colors = ButtonDefaults.buttonColors(
+                        containerColor = Color(0xFF0D9488),
+                        contentColor = Color.White
+                    ),
                     shape = RoundedCornerShape(8.dp)
                 ) {
-                    Text("Add Manually", fontSize = 13.sp)
+                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                    Spacer(modifier = Modifier.width(6.dp))
+                    Text("Add Manually", fontSize = 13.sp, fontWeight = FontWeight.Bold)
                 }
             }
 
-            // -------------------------------------------------------------
-            // Active Account Code Card
-            // -------------------------------------------------------------
+            // Live OTP Code Card
             Card(
                 colors = CardDefaults.cardColors(containerColor = Color(0xFF141824)),
-                border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(Color(0xFF23283A))),
+                border = CardDefaults.outlinedCardBorder().copy(
+                    brush = androidx.compose.ui.graphics.SolidColor(Color(0xFF23283A))
+                ),
                 shape = RoundedCornerShape(12.dp),
                 modifier = Modifier.fillMaxWidth()
             ) {
@@ -292,13 +320,13 @@ fun AuthenticatorScreen() {
                 }
             }
 
-            // -------------------------------------------------------------
-            // Account Details Card (Matching Screenshot)
-            // -------------------------------------------------------------
+            // Account Details Card
             if (activeAccount != null) {
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF141824)),
-                    border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(Color(0xFF23283A))),
+                    border = CardDefaults.outlinedCardBorder().copy(
+                        brush = androidx.compose.ui.graphics.SolidColor(Color(0xFF23283A))
+                    ),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
@@ -310,7 +338,6 @@ fun AuthenticatorScreen() {
                         DetailField(label = "Website Address", value = activeAccount.websiteAddress)
                         DetailField(label = "Username", value = activeAccount.username)
 
-                        // Secret Key Field with reveal & copy
                         Text(
                             text = "Secret Key (Seed, Shared Secret, ...)",
                             color = Color(0xFF7F869E),
@@ -343,17 +370,25 @@ fun AuthenticatorScreen() {
                 }
 
                 // -------------------------------------------------------------
-                // Advanced Options Card (Matching Screenshot)
+                // Advanced Options Card (Clickable Row + Expanding Animation)
                 // -------------------------------------------------------------
                 Card(
                     colors = CardDefaults.cardColors(containerColor = Color(0xFF141824)),
-                    border = CardDefaults.outlinedCardBorder().copy(brush = androidx.compose.ui.graphics.SolidColor(Color(0xFF23283A))),
+                    border = CardDefaults.outlinedCardBorder().copy(
+                        brush = androidx.compose.ui.graphics.SolidColor(Color(0xFF23283A))
+                    ),
                     shape = RoundedCornerShape(12.dp),
                     modifier = Modifier.fillMaxWidth()
                 ) {
                     Column(modifier = Modifier.padding(18.dp)) {
+                        // Entire row is clickable to expand/collapse
                         Row(
-                            modifier = Modifier.fillMaxWidth(),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clip(RoundedCornerShape(8.dp))
+                                .clickable {
+                                    updateActiveAccount { it.copy(showAdvanced = !it.showAdvanced) }
+                                },
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
@@ -366,8 +401,7 @@ fun AuthenticatorScreen() {
                             Switch(
                                 checked = activeAccount.showAdvanced,
                                 onCheckedChange = { checked ->
-                                    activeAccount.showAdvanced = checked
-                                    saveAccounts(context, accounts)
+                                    updateActiveAccount { it.copy(showAdvanced = checked) }
                                 },
                                 colors = SwitchDefaults.colors(
                                     checkedThumbColor = Color.White,
@@ -378,45 +412,47 @@ fun AuthenticatorScreen() {
                             )
                         }
 
-                        if (activeAccount.showAdvanced) {
-                            Spacer(modifier = Modifier.height(14.dp))
+                        // Smooth animated expansion
+                        AnimatedVisibility(
+                            visible = activeAccount.showAdvanced,
+                            enter = expandVertically() + fadeIn(),
+                            exit = shrinkVertically() + fadeOut()
+                        ) {
+                            Column(modifier = Modifier.padding(top = 16.dp)) {
+                                // 1. Algorithm: SHA1 | SHA256 | SHA512
+                                PillSelectorRow(
+                                    label = "Algorithm",
+                                    options = listOf("SHA1", "SHA256", "SHA512"),
+                                    selected = activeAccount.algorithm,
+                                    onSelect = { algo ->
+                                        updateActiveAccount { it.copy(algorithm = algo) }
+                                    }
+                                )
 
-                            // Algorithm: SHA1 | SHA256 | SHA512
-                            PillSelectorRow(
-                                label = "Algorithm",
-                                options = listOf("SHA1", "SHA256", "SHA512"),
-                                selected = activeAccount.algorithm,
-                                onSelect = {
-                                    activeAccount.algorithm = it
-                                    saveAccounts(context, accounts)
-                                }
-                            )
+                                Spacer(modifier = Modifier.height(14.dp))
 
-                            Spacer(modifier = Modifier.height(12.dp))
+                                // 2. Digits: 6 | 8
+                                PillSelectorRow(
+                                    label = "Digits",
+                                    options = listOf("6", "8"),
+                                    selected = activeAccount.digits.toString(),
+                                    onSelect = { digitsStr ->
+                                        updateActiveAccount { it.copy(digits = digitsStr.toIntOrNull() ?: 6) }
+                                    }
+                                )
 
-                            // Digits: 6 | 8
-                            PillSelectorRow(
-                                label = "Digits",
-                                options = listOf("6", "8"),
-                                selected = activeAccount.digits.toString(),
-                                onSelect = {
-                                    activeAccount.digits = it.toInt()
-                                    saveAccounts(context, accounts)
-                                }
-                            )
+                                Spacer(modifier = Modifier.height(14.dp))
 
-                            Spacer(modifier = Modifier.height(12.dp))
-
-                            // Period: 15 | 30 | 60 | 120
-                            PillSelectorRow(
-                                label = "Period",
-                                options = listOf("15", "30", "60", "120"),
-                                selected = activeAccount.period.toString(),
-                                onSelect = {
-                                    activeAccount.period = it.toInt()
-                                    saveAccounts(context, accounts)
-                                }
-                            )
+                                // 3. Period: 15 | 30 | 60 | 120
+                                PillSelectorRow(
+                                    label = "Period",
+                                    options = listOf("15", "30", "60", "120"),
+                                    selected = activeAccount.period.toString(),
+                                    onSelect = { periodStr ->
+                                        updateActiveAccount { it.copy(period = periodStr.toIntOrNull() ?: 30) }
+                                    }
+                                )
+                            }
                         }
                     }
                 }
@@ -438,7 +474,9 @@ fun AuthenticatorScreen() {
         }
     }
 
-    // Manual Add Dialog
+    // -------------------------------------------------------------
+    // Manual Add Dialog (Fully Themed, No Material3 Purple)
+    // -------------------------------------------------------------
     if (showManualAddDialog) {
         ManualAddDialog(
             onDismiss = { showManualAddDialog = false },
@@ -514,31 +552,61 @@ fun ManualAddDialog(onDismiss: () -> Unit, onConfirm: (Account) -> Unit) {
     var username by remember { mutableStateOf("") }
     var secret by remember { mutableStateOf("") }
 
+    val customTextFieldColors = OutlinedTextFieldDefaults.colors(
+        focusedTextColor = Color.White,
+        unfocusedTextColor = Color(0xFFE4E7EE),
+        focusedBorderColor = Color(0xFF1E88E5),
+        unfocusedBorderColor = Color(0xFF333A54),
+        focusedLabelColor = Color(0xFF64B5F6),
+        unfocusedLabelColor = Color(0xFFA6ADC8),
+        cursorColor = Color(0xFF1E88E5),
+        focusedContainerColor = Color(0xFF1E2436),
+        unfocusedContainerColor = Color(0xFF1A1F30)
+    )
+
     AlertDialog(
         onDismissRequest = onDismiss,
         containerColor = Color(0xFF141824),
-        title = { Text("Add Account Manually", color = Color.White) },
+        title = {
+            Text(
+                text = "Add Account Manually",
+                color = Color.White,
+                fontWeight = FontWeight.Bold
+            )
+        },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                 OutlinedTextField(
                     value = websiteName,
                     onValueChange = { websiteName = it },
-                    label = { Text("Website Name (e.g. GitHub)") }
+                    label = { Text("Website Name (e.g. GitHub)") },
+                    colors = customTextFieldColors,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = websiteAddress,
                     onValueChange = { websiteAddress = it },
-                    label = { Text("Website Address") }
+                    label = { Text("Website Address") },
+                    colors = customTextFieldColors,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = username,
                     onValueChange = { username = it },
-                    label = { Text("Username") }
+                    label = { Text("Username") },
+                    colors = customTextFieldColors,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
                 )
                 OutlinedTextField(
                     value = secret,
                     onValueChange = { secret = it.uppercase().replace(" ", "") },
-                    label = { Text("Secret Key (Base32)") }
+                    label = { Text("Secret Key (Base32)") },
+                    colors = customTextFieldColors,
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
                 )
             }
         },
@@ -556,14 +624,17 @@ fun ManualAddDialog(onDismiss: () -> Unit, onConfirm: (Account) -> Unit) {
                         )
                     }
                 },
-                colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF1E88E5))
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = Color(0xFF0D9488),
+                    contentColor = Color.White
+                )
             ) {
-                Text("Add")
+                Text("Add Account", fontWeight = FontWeight.Bold)
             }
         },
         dismissButton = {
             TextButton(onClick = onDismiss) {
-                Text("Cancel", color = Color.White)
+                Text("Cancel", color = Color(0xFFA6ADC8))
             }
         }
     )
@@ -614,7 +685,6 @@ fun decodeQrFromUri(context: Context, uri: Uri): String? {
 fun parseOtpUri(uriString: String): Account? {
     val uri = uriString.trim()
     if (!uri.startsWith("otpauth://", ignoreCase = true)) {
-        // Plain Base32 fallback
         val clean = uri.uppercase().replace(" ", "")
         return if (clean.length >= 8) {
             Account(websiteName = "Custom Key", username = "Account", secret = clean)
@@ -653,7 +723,6 @@ fun parseOtpUri(uriString: String): Account? {
     }
 }
 
-// RFC 6238 / RFC 4226 pure Kotlin TOTP generator
 fun generateTotp(secret: String, digits: Int, period: Int, algorithm: String): String {
     return try {
         val keyBytes = decodeBase32(secret)
@@ -684,7 +753,6 @@ fun generateTotp(secret: String, digits: Int, period: Int, algorithm: String): S
     }
 }
 
-// RFC 4648 Base32 Decoder
 fun decodeBase32(input: String): ByteArray {
     val base32Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567"
     val clean = input.uppercase().replace("=", "").replace(" ", "")
@@ -706,13 +774,14 @@ fun decodeBase32(input: String): ByteArray {
 }
 
 // -------------------------------------------------------------
-// Compose Theme
+// Theme
 // -------------------------------------------------------------
 @Composable
 fun AuthenticatorTheme(content: @Composable () -> Unit) {
     MaterialTheme(
         colorScheme = darkColorScheme(
             primary = Color(0xFF1E88E5),
+            secondary = Color(0xFF0D9488),
             surface = Color(0xFF141824),
             background = Color(0xFF0F121A)
         ),
